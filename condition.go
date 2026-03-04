@@ -164,7 +164,7 @@ func NotIn(field string, value []any) Condition {
 //
 // Example:
 //
-//	ruler.Matches("email", `^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$`)
+//	ruler.Matches("email", `^[a-z0-9._%+-]+@[a-z0-9.-]+.[a-z]{2,}$`)
 func Matches(field string, pattern string) Condition {
 	return Condition{Field: field, Op: OpMatches, Value: pattern}
 }
