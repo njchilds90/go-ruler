@@ -8,6 +8,7 @@ package ruler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -33,13 +34,13 @@ type Priority int
 // Example:
 //
 //	rule := ruler.Rule{
-//	    Name:       "high-value-customer",
-//	    Priority:   10,
-//	    Op:         ruler.OpAnd,
-//	    Conditions: []ruler.Condition{
-//	        ruler.GreaterThan("total_spend", 1000.0),
-//	        ruler.Equals("status", "active"),
-//	    },
+//		Name:       "high-value-customer",
+//		Priority:   10,
+//		Op:         ruler.OpAnd,
+//		Conditions: []ruler.Condition{
+//			ruler.GreaterThan("total_spend", 1000.0),
+//			ruler.Equals("status", "active"),
+//		},
 //	}
 type Rule struct {
 	// Name is the unique identifier for this rule.
@@ -59,6 +60,9 @@ type Rule struct {
 	// Metadata holds arbitrary key-value data attached to a rule.
 	Metadata map[string]any
 }
+
+var ErrInvalidRule = errors.New("invalid rule")
+var ErrContextCanceled = errors.New("context canceled")
 
 // validate checks that a Rule is well-formed.
 func (r Rule) validate() error {
@@ -125,6 +129,8 @@ func (b byPriority) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
 func sortRules(rules []Rule) []Rule {
 	cp := make([]Rule, len(rules))
 	copy(cp, rules)
-	sort.Sort(byPriority(cp))
+	if len(cp) > 0 {
+		sort.Sort(byPriority(cp))
+	}
 	return cp
 }
