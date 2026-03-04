@@ -79,7 +79,7 @@ func main() {
     }
 
     for _, r := range matched {
-        fmt.Printf("✓ %s (score: %.0f)\n", r.RuleName, r.Score)
+        fmt.Printf("\u2705 %s (score: %.0f)\n", r.RuleName, r.Score)
         fmt.Printf("  conditions: %v\n", r.MatchedConditions)
     }
 }
@@ -87,7 +87,7 @@ func main() {
 
 Output:
 ```
-✓ premium-adult-user (score: 100)
+\u2705 premium-adult-user (score: 100)
   conditions: [age gte 18 plan eq premium status eq active]
 ```
 
@@ -112,7 +112,7 @@ ruler.Contains("bio", "gopher")          // string or []any
 ruler.NotContains("bio", "spam")
 ruler.In("role", []any{"admin", "mod"})
 ruler.NotIn("role", []any{"banned"})
-ruler.Matches("email", `^.+@.+\..+$`)   // regex
+ruler.Matches("email", `^.+@.+..+$`)   // regex
 ruler.Exists("optional_field")
 ruler.NotExists("deleted_at")
 ```
@@ -135,7 +135,7 @@ e.MustAddRule(ruler.Rule{
     Name: "risk:invalid-email", Score: 40,
     Op: ruler.OpAnd,
     Conditions: []ruler.Condition{
-        ruler.NotMatches("email", `^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$`),
+        ruler.NotMatches("email", `^[a-z0-9._%+-]+@[a-z0-9.\-]+\.[a-z]{2,}$`),
     },
 })
 
@@ -149,7 +149,7 @@ score, _ := e.TotalScore(ctx, ruler.FactMap{
 
 ## Error Handling
 
-go-ruler uses sentinel errors wrappable with `errors.Is`:
+goruler uses sentinel errors wrappable with `errors.Is`:
 ```go
 var (
     ruler.ErrInvalidRule
@@ -162,7 +162,7 @@ var (
 
 ## AI Agent Use Case
 
-go-ruler is ideal for agent decision pipelines:
+goruler is ideal for agent decision pipelines:
 ```go
 type AgentDecision struct {
     Action string
