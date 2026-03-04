@@ -31,12 +31,8 @@ Open a GitHub Issue with:
 - Patch (`v1.0.x`): bug fixes, no API changes
 - Minor (`v1.x.0`): new operators, new methods, backward-compatible
 - Major (`v2.0.0`): breaking API changes (rare, discussed in issues first)
-```
 
----
-
-## 4. Release & Verification
-```
+## Release & Verification
 RELEASE STEPS (GitHub Web UI only)
 ====================================
 
@@ -53,7 +49,7 @@ RELEASE STEPS (GitHub Web UI only)
    Title:
      v1.0.0 — Initial Release
 
-   Release notes (paste this):
+   Release notes:
    ---
    ## go-ruler v1.0.0
 
@@ -80,10 +76,9 @@ RELEASE STEPS (GitHub Web UI only)
 
 SEMANTIC VERSIONING GUIDANCE
 =============================
-v1.0.x  → Bug fixes only, no API changes
-v1.1.0  → New condition operators, new Engine methods (backward-compatible)
-v1.2.0  → New evaluation hooks or middleware pattern (backward-compatible)
-v2.0.0  → Breaking API changes (discuss in issues first)
+- v1.0.x  → Bug fixes only, no API changes
+- v1.x.0  → New condition operators, new Engine methods (backward-compatible)
+- v2.0.0  → Breaking API changes (discuss in issues first)
 
 VERIFICATION
 =============
