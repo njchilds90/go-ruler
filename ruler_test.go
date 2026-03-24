@@ -179,13 +179,13 @@ func TestMatches(t *testing.T) {
 func TestExistsNotExists(t *testing.T) {
 	e := ruler.NewEngine()
 	e.MustAddRule(ruler.Rule{
-		Name: "has-email",
-		Op:   ruler.OpAnd,
+		Name:       "has-email",
+		Op:         ruler.OpAnd,
 		Conditions: []ruler.Condition{ruler.Exists("email")},
 	})
 	e.MustAddRule(ruler.Rule{
-		Name: "no-ban",
-		Op:   ruler.OpAnd,
+		Name:       "no-ban",
+		Op:         ruler.OpAnd,
 		Conditions: []ruler.Condition{ruler.NotExists("ban_reason")},
 	})
 

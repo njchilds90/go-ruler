@@ -24,32 +24,23 @@ const (
 	OpMatches           Operator = "matches"
 	OpExists            Operator = "exists"
 	OpNotExists         Operator = "not_exists"
+	OpStartsWith        Operator = "starts_with"
+	OpEndsWith          Operator = "ends_with"
+	OpBetween           Operator = "between"
 )
 
 // FactMap is the set of named facts evaluated against rules.
-// Values may be any comparable type: string, int, float64, bool, []any, etc.
 type FactMap map[string]any
 
 // Condition represents a single comparison between a fact value and an expected value.
-//
-// Example:
-//
-//	c := ruler.Condition{Field: "age", Op: ruler.OpGreaterThan, Value: 18}
 type Condition struct {
-	// Field is the key looked up in the FactMap.
-	Field string
-	// Op is the comparison operator.
-	Op Operator
-	// Value is the expected value to compare against.
-	Value any
+	Field string   `json:"field"`
+	Op    Operator `json:"op"`
+	Value any      `json:"value,omitempty"`
 }
 
-// label returns a human-readable description of the condition.
-func (c Condition) label() string {
-	return fmt.Sprintf("%s %s %v", c.Field, c.Op, c.Value)
-}
+func (c Condition) label() string { return fmt.Sprintf("%s %s %v", c.Field, c.Op, c.Value) }
 
-// evaluate compares the fact value to the condition value using Op.
 func (c Condition) evaluate(facts FactMap) (bool, error) {
 	switch c.Op {
 	case OpExists:
@@ -62,7 +53,6 @@ func (c Condition) evaluate(facts FactMap) (bool, error) {
 
 	factVal, ok := facts[c.Field]
 	if !ok {
-		// For non-existence ops a missing field is not an error; just doesn't match.
 		return false, nil
 	}
 
@@ -89,18 +79,18 @@ func (c Condition) evaluate(facts FactMap) (bool, error) {
 		return evalIn(factVal, c.Value, false)
 	case OpMatches:
 		return evalMatches(factVal, c.Value)
+	case OpStartsWith:
+		return evalPrefixSuffix(factVal, c.Value, true)
+	case OpEndsWith:
+		return evalPrefixSuffix(factVal, c.Value, false)
+	case OpBetween:
+		return evalBetween(factVal, c.Value)
 	default:
 		return false, fmt.Errorf("%w: unknown operator %q", ErrInvalidCondition, c.Op)
 	}
 }
 
-// --- Constructor helpers ---
-
 // Equals creates a Condition that passes when fact[field] == value.
-//
-// Example:
-//
-//	ruler.Equals("status", "active")
 func Equals(field string, value any) Condition {
 	return Condition{Field: field, Op: OpEquals, Value: value}
 }
@@ -111,10 +101,6 @@ func NotEquals(field string, value any) Condition {
 }
 
 // GreaterThan creates a Condition that passes when fact[field] > value (numeric).
-//
-// Example:
-//
-//	ruler.GreaterThan("age", 18)
 func GreaterThan(field string, value any) Condition {
 	return Condition{Field: field, Op: OpGreaterThan, Value: value}
 }
@@ -134,9 +120,7 @@ func LessThanEquals(field string, value any) Condition {
 	return Condition{Field: field, Op: OpLessThanEquals, Value: value}
 }
 
-// Contains creates a Condition that passes when:
-//   - fact[field] is a string containing value (string)
-//   - fact[field] is a []any containing value
+// Contains creates a Condition that passes when fact[field] contains value.
 func Contains(field string, value any) Condition {
 	return Condition{Field: field, Op: OpContains, Value: value}
 }
@@ -147,13 +131,7 @@ func NotContains(field string, value any) Condition {
 }
 
 // In creates a Condition that passes when fact[field] is present in value ([]any).
-//
-// Example:
-//
-//	ruler.In("role", []any{"admin", "editor", "moderator"})
-func In(field string, value []any) Condition {
-	return Condition{Field: field, Op: OpIn, Value: value}
-}
+func In(field string, value []any) Condition { return Condition{Field: field, Op: OpIn, Value: value} }
 
 // NotIn creates a Condition that passes when fact[field] is NOT in value ([]any).
 func NotIn(field string, value []any) Condition {
@@ -161,25 +139,30 @@ func NotIn(field string, value []any) Condition {
 }
 
 // Matches creates a Condition that passes when fact[field] (string) matches the regex pattern.
-//
-// Example:
-//
-//	ruler.Matches("email", `^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$`)
 func Matches(field string, pattern string) Condition {
 	return Condition{Field: field, Op: OpMatches, Value: pattern}
 }
 
 // Exists creates a Condition that passes when fact[field] is present in the FactMap.
-func Exists(field string) Condition {
-	return Condition{Field: field, Op: OpExists}
-}
+func Exists(field string) Condition { return Condition{Field: field, Op: OpExists} }
 
 // NotExists creates a Condition that passes when fact[field] is absent from the FactMap.
-func NotExists(field string) Condition {
-	return Condition{Field: field, Op: OpNotExists}
+func NotExists(field string) Condition { return Condition{Field: field, Op: OpNotExists} }
+
+// StartsWith creates a Condition that passes when fact[field] starts with prefix.
+func StartsWith(field, prefix string) Condition {
+	return Condition{Field: field, Op: OpStartsWith, Value: prefix}
 }
 
-// --- Internal comparison helpers ---
+// EndsWith creates a Condition that passes when fact[field] ends with suffix.
+func EndsWith(field, suffix string) Condition {
+	return Condition{Field: field, Op: OpEndsWith, Value: suffix}
+}
+
+// Between creates a Condition that passes when lower <= fact[field] <= upper.
+func Between(field string, lower, upper any) Condition {
+	return Condition{Field: field, Op: OpBetween, Value: []any{lower, upper}}
+}
 
 func toFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
@@ -261,7 +244,7 @@ func evalIn(factVal, condVal any, wantIn bool) (bool, error) {
 }
 
 func evalMatches(factVal, condVal any) (bool, error) {
-	sv, ok := factVal.(string)
+	s, ok := factVal.(string)
 	if !ok {
 		return false, fmt.Errorf("%w: matches requires string fact, got %T", ErrTypeMismatch, factVal)
 	}
@@ -271,7 +254,42 @@ func evalMatches(factVal, condVal any) (bool, error) {
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid regex pattern %q: %v", ErrInvalidCondition, pattern, err)
+		return false, fmt.Errorf("%w: invalid regex %q: %v", ErrInvalidCondition, pattern, err)
 	}
-	return re.MatchString(sv), nil
+	return re.MatchString(s), nil
+}
+
+func evalPrefixSuffix(factVal, condVal any, starts bool) (bool, error) {
+	s, ok := factVal.(string)
+	if !ok {
+		return false, fmt.Errorf("%w: starts_with/ends_with requires string fact, got %T", ErrTypeMismatch, factVal)
+	}
+	prefix, ok := condVal.(string)
+	if !ok {
+		return false, fmt.Errorf("%w: starts_with/ends_with requires string value, got %T", ErrTypeMismatch, condVal)
+	}
+	if starts {
+		return strings.HasPrefix(s, prefix), nil
+	}
+	return strings.HasSuffix(s, prefix), nil
+}
+
+func evalBetween(factVal, condVal any) (bool, error) {
+	bounds, ok := condVal.([]any)
+	if !ok || len(bounds) != 2 {
+		return false, fmt.Errorf("%w: between requires []any with [lower, upper]", ErrInvalidCondition)
+	}
+	lower, ok := toFloat64(bounds[0])
+	if !ok {
+		return false, fmt.Errorf("%w: between lower bound must be numeric", ErrTypeMismatch)
+	}
+	upper, ok := toFloat64(bounds[1])
+	if !ok {
+		return false, fmt.Errorf("%w: between upper bound must be numeric", ErrTypeMismatch)
+	}
+	value, ok := toFloat64(factVal)
+	if !ok {
+		return false, fmt.Errorf("%w: between fact value must be numeric", ErrTypeMismatch)
+	}
+	return value >= lower && value <= upper, nil
 }

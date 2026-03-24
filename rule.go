@@ -1,9 +1,4 @@
 // Package ruler provides a declarative, zero-dependency rule engine for Go.
-// It enables you to define named rules composed of typed conditions, evaluate
-// them against arbitrary fact maps, and receive structured, explainable results.
-//
-// go-ruler is designed for deterministic behavior, machine-readable outputs,
-// and AI-agent-friendly evaluation pipelines.
 package ruler
 
 import (
@@ -12,55 +7,27 @@ import (
 	"sort"
 )
 
-// ConditionOp defines the logical operator used to combine multiple conditions
-// within a single Rule.
 type ConditionOp string
 
 const (
-	// OpAnd requires all conditions to pass for the rule to match.
 	OpAnd ConditionOp = "AND"
-	// OpOr requires at least one condition to pass for the rule to match.
-	OpOr ConditionOp = "OR"
+	OpOr  ConditionOp = "OR"
 )
 
-// Priority determines the order in which rules are evaluated and returned.
-// Higher values are evaluated first.
 type Priority int
 
 // Rule defines a named, weighted policy that is evaluated against a FactMap.
-// A Rule consists of one or more Conditions combined with a logical operator.
-//
-// Example:
-//
-//	rule := ruler.Rule{
-//	    Name:       "high-value-customer",
-//	    Priority:   10,
-//	    Op:         ruler.OpAnd,
-//	    Conditions: []ruler.Condition{
-//	        ruler.GreaterThan("total_spend", 1000.0),
-//	        ruler.Equals("status", "active"),
-//	    },
-//	}
 type Rule struct {
-	// Name is the unique identifier for this rule.
-	Name string
-	// Description is a human-readable explanation of what this rule represents.
-	Description string
-	// Priority controls evaluation order. Higher = evaluated first.
-	Priority Priority
-	// Score is an optional numeric weight assigned when this rule matches.
-	Score float64
-	// Op is the logical operator (AND/OR) used to combine Conditions.
-	Op ConditionOp
-	// Conditions is the list of conditions that must be satisfied.
-	Conditions []Condition
-	// Tags are optional labels for grouping or filtering rules.
-	Tags []string
-	// Metadata holds arbitrary key-value data attached to a rule.
-	Metadata map[string]any
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Priority    Priority       `json:"priority,omitempty"`
+	Score       float64        `json:"score,omitempty"`
+	Op          ConditionOp    `json:"op,omitempty"`
+	Conditions  []Condition    `json:"conditions"`
+	Tags        []string       `json:"tags,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
-// validate checks that a Rule is well-formed.
 func (r Rule) validate() error {
 	if r.Name == "" {
 		return fmt.Errorf("%w: rule name must not be empty", ErrInvalidRule)
@@ -78,8 +45,6 @@ func (r Rule) validate() error {
 	return nil
 }
 
-// evaluate runs all conditions against facts using the rule's Op.
-// Returns matched conditions and whether the rule as a whole matched.
 func (r Rule) evaluate(ctx context.Context, facts FactMap) (matched []string, ok bool, err error) {
 	op := r.Op
 	if op == "" {
@@ -114,14 +79,17 @@ func (r Rule) evaluate(ctx context.Context, facts FactMap) (matched []string, ok
 	return matched, ok, nil
 }
 
-// byPriority sorts rules in descending priority order.
 type byPriority []Rule
 
-func (b byPriority) Len() int           { return len(b) }
-func (b byPriority) Less(i, j int) bool { return b[i].Priority > b[j].Priority }
-func (b byPriority) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+func (b byPriority) Len() int      { return len(b) }
+func (b byPriority) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
+func (b byPriority) Less(i, j int) bool {
+	if b[i].Priority == b[j].Priority {
+		return b[i].Name < b[j].Name
+	}
+	return b[i].Priority > b[j].Priority
+}
 
-// sortRules returns a copy of rules sorted by descending priority.
 func sortRules(rules []Rule) []Rule {
 	cp := make([]Rule, len(rules))
 	copy(cp, rules)

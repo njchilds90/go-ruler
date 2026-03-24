@@ -1,36 +1,46 @@
 package ruler
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // Result is the structured output of evaluating a single Rule against a FactMap.
-// It is designed to be machine-readable and agent-friendly.
 type Result struct {
-	// RuleName is the name of the evaluated rule.
-	RuleName string `json:"rule_name"`
-	// RuleDescription is the human-readable description of the rule.
-	RuleDescription string `json:"rule_description,omitempty"`
-	// Matched indicates whether the rule as a whole passed.
-	Matched bool `json:"matched"`
-	// Score is the rule's weight, non-zero only when Matched is true.
-	Score float64 `json:"score,omitempty"`
-	// MatchedConditions lists human-readable descriptions of conditions that passed.
-	MatchedConditions []string `json:"matched_conditions,omitempty"`
-	// Tags are the tags copied from the matched Rule.
-	Tags []string `json:"tags,omitempty"`
-	// Metadata is arbitrary data copied from the matched Rule.
-	Metadata map[string]any `json:"metadata,omitempty"`
+	RuleName          string         `json:"rule_name"`
+	RuleDescription   string         `json:"rule_description,omitempty"`
+	Matched           bool           `json:"matched"`
+	Score             float64        `json:"score,omitempty"`
+	MatchedConditions []string       `json:"matched_conditions,omitempty"`
+	Tags              []string       `json:"tags,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
-// Sentinel errors for structured error handling.
+// AgentDecision is the top-level structured output intended for autonomous agents.
+type AgentDecision struct {
+	Action       string         `json:"action"`
+	Allowed      bool           `json:"allowed"`
+	Score        float64        `json:"score"`
+	TraceID      string         `json:"trace_id,omitempty"`
+	Reasons      []string       `json:"reasons,omitempty"`
+	MatchedRules []Result       `json:"matched_rules,omitempty"`
+	AllRules     []Result       `json:"all_rules,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	EvaluatedAt  time.Time      `json:"evaluated_at"`
+}
+
+// WhatIfResult contains current and candidate decisions for side-by-side analysis.
+type WhatIfResult struct {
+	Current   AgentDecision `json:"current"`
+	Candidate AgentDecision `json:"candidate"`
+	Delta     float64       `json:"delta"`
+}
+
 var (
-	// ErrInvalidRule is returned when a Rule fails structural validation.
-	ErrInvalidRule = errors.New("ruler: invalid rule")
-	// ErrInvalidCondition is returned when a Condition uses an unsupported operator or bad value.
+	ErrInvalidRule      = errors.New("ruler: invalid rule")
 	ErrInvalidCondition = errors.New("ruler: invalid condition")
-	// ErrDuplicateRule is returned when two rules share the same name.
-	ErrDuplicateRule = errors.New("ruler: duplicate rule")
-	// ErrTypeMismatch is returned when a condition's fact value and expected value are incompatible types.
-	ErrTypeMismatch = errors.New("ruler: type mismatch")
-	// ErrContextCanceled is returned when the context is canceled during evaluation.
-	ErrContextCanceled = errors.New("ruler: context canceled")
+	ErrDuplicateRule    = errors.New("ruler: duplicate rule")
+	ErrTypeMismatch     = errors.New("ruler: type mismatch")
+	ErrContextCanceled  = errors.New("ruler: context canceled")
+	ErrEngineFrozen     = errors.New("ruler: engine is frozen")
 )

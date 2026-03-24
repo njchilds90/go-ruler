@@ -2,50 +2,66 @@ package ruler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 )
 
+// Evaluator is the interface implemented by Engine.
+type Evaluator interface {
+	EvaluateAll(ctx context.Context, facts FactMap) ([]Result, error)
+	EvaluateDecision(ctx context.Context, facts FactMap) (AgentDecision, error)
+}
+
+// Option applies optional behavior to Engine.
+type Option func(*Engine)
+
+// WithCache enables deterministic in-memory caching of decision responses.
+func WithCache() Option {
+	return func(e *Engine) { e.cacheEnabled = true }
+}
+
 // Engine holds a registered set of Rules and evaluates them against FactMaps.
-// An Engine is safe for concurrent read use after construction. It must not be
-// mutated after the first call to Evaluate or EvaluateAll.
-//
-// Example:
-//
-//	e := ruler.NewEngine()
-//	e.AddRule(ruler.Rule{
-//	    Name: "adult",
-//	    Op:   ruler.OpAnd,
-//	    Conditions: []ruler.Condition{
-//	        ruler.GreaterThanEquals("age", 18),
-//	    },
-//	})
-//	results, err := e.EvaluateAll(context.Background(), ruler.FactMap{"age": 21})
 type Engine struct {
-	rules []Rule
+	mu           sync.RWMutex
+	rules        []Rule
+	frozen       bool
+	cacheEnabled bool
+	cache        map[[32]byte]AgentDecision
 }
 
 // NewEngine creates an empty Engine ready for rule registration.
-//
-// Example:
-//
-//	e := ruler.NewEngine()
-func NewEngine() *Engine {
-	return &Engine{}
+func NewEngine(opts ...Option) *Engine {
+	e := &Engine{cache: make(map[[32]byte]AgentDecision)}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
-// AddRule registers a Rule with the Engine. Returns an error if the rule is invalid
-// or if a rule with the same Name has already been added.
-//
-// Example:
-//
-//	err := e.AddRule(ruler.Rule{
-//	    Name: "premium",
-//	    Op:   ruler.OpAnd,
-//	    Conditions: []ruler.Condition{
-//	        ruler.Equals("plan", "premium"),
-//	    },
-//	})
+// NewFromRules constructs an Engine from a rule list.
+func NewFromRules(rules []Rule, opts ...Option) (*Engine, error) {
+	e := NewEngine(opts...)
+	for _, r := range rules {
+		if err := e.AddRule(r); err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
+// Freeze prevents further rule registration and makes mutation-safe concurrent use explicit.
+func (e *Engine) Freeze() { e.mu.Lock(); e.frozen = true; e.mu.Unlock() }
+
+// AddRule registers a Rule with the Engine.
 func (e *Engine) AddRule(r Rule) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.frozen {
+		return ErrEngineFrozen
+	}
 	if err := r.validate(); err != nil {
 		return err
 	}
@@ -58,12 +74,7 @@ func (e *Engine) AddRule(r Rule) error {
 	return nil
 }
 
-// MustAddRule registers a Rule and panics if the rule is invalid or duplicated.
-// Intended for use in package-level var blocks or test setup.
-//
-// Example:
-//
-//	e.MustAddRule(ruler.Rule{Name: "vip", Op: ruler.OpAnd, Conditions: []ruler.Condition{ruler.Equals("tier", "vip")}})
+// MustAddRule registers a Rule and panics on error.
 func (e *Engine) MustAddRule(r Rule) {
 	if err := e.AddRule(r); err != nil {
 		panic(err)
@@ -71,12 +82,12 @@ func (e *Engine) MustAddRule(r Rule) {
 }
 
 // RuleCount returns the number of rules registered in the Engine.
-func (e *Engine) RuleCount() int {
-	return len(e.rules)
-}
+func (e *Engine) RuleCount() int { e.mu.RLock(); defer e.mu.RUnlock(); return len(e.rules) }
 
-// RuleNames returns the names of all registered rules in priority order (highest first).
+// RuleNames returns sorted names in evaluation order.
 func (e *Engine) RuleNames() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	sorted := sortRules(e.rules)
 	names := make([]string, len(sorted))
 	for i, r := range sorted {
@@ -85,15 +96,12 @@ func (e *Engine) RuleNames() []string {
 	return names
 }
 
-// EvaluateAll evaluates all registered rules against facts and returns a Result
-// for every rule, regardless of whether it matched.
-// Rules are evaluated in descending Priority order.
-//
-// Example:
-//
-//	results, err := e.EvaluateAll(ctx, ruler.FactMap{"age": 25, "plan": "premium"})
+// EvaluateAll evaluates all registered rules against facts.
 func (e *Engine) EvaluateAll(ctx context.Context, facts FactMap) ([]Result, error) {
-	sorted := sortRules(e.rules)
+	e.mu.RLock()
+	rules := append([]Rule(nil), e.rules...)
+	e.mu.RUnlock()
+	sorted := sortRules(rules)
 	results := make([]Result, 0, len(sorted))
 	for _, r := range sorted {
 		res, err := evalRule(ctx, r, facts)
@@ -106,11 +114,6 @@ func (e *Engine) EvaluateAll(ctx context.Context, facts FactMap) ([]Result, erro
 }
 
 // EvaluateMatching evaluates all rules and returns only those that matched.
-// Rules are returned in descending Priority order.
-//
-// Example:
-//
-//	matched, err := e.EvaluateMatching(ctx, ruler.FactMap{"age": 25})
 func (e *Engine) EvaluateMatching(ctx context.Context, facts FactMap) ([]Result, error) {
 	all, err := e.EvaluateAll(ctx, facts)
 	if err != nil {
@@ -126,14 +129,11 @@ func (e *Engine) EvaluateMatching(ctx context.Context, facts FactMap) ([]Result,
 }
 
 // EvaluateFirst evaluates rules in priority order and returns the first match.
-// Returns (Result{}, false, nil) if no rule matched.
-//
-// Example:
-//
-//	result, matched, err := e.EvaluateFirst(ctx, ruler.FactMap{"plan": "free"})
 func (e *Engine) EvaluateFirst(ctx context.Context, facts FactMap) (Result, bool, error) {
-	sorted := sortRules(e.rules)
-	for _, r := range sorted {
+	e.mu.RLock()
+	rules := append([]Rule(nil), e.rules...)
+	e.mu.RUnlock()
+	for _, r := range sortRules(rules) {
 		res, err := evalRule(ctx, r, facts)
 		if err != nil {
 			return Result{}, false, err
@@ -146,10 +146,6 @@ func (e *Engine) EvaluateFirst(ctx context.Context, facts FactMap) (Result, bool
 }
 
 // TotalScore sums the Score of all matched rules for a given FactMap.
-//
-// Example:
-//
-//	score, err := e.TotalScore(ctx, ruler.FactMap{"risk_flag": true, "new_account": true})
 func (e *Engine) TotalScore(ctx context.Context, facts FactMap) (float64, error) {
 	matched, err := e.EvaluateMatching(ctx, facts)
 	if err != nil {
@@ -162,21 +158,88 @@ func (e *Engine) TotalScore(ctx context.Context, facts FactMap) (float64, error)
 	return total, nil
 }
 
-// evalRule is the internal per-rule evaluator.
+// EvaluateDecision returns a deterministic, agent-friendly decision document.
+func (e *Engine) EvaluateDecision(ctx context.Context, facts FactMap) (AgentDecision, error) {
+	if e.cacheEnabled {
+		if cached, ok := e.getCached(facts); ok {
+			return cached, nil
+		}
+	}
+	all, err := e.EvaluateAll(ctx, facts)
+	if err != nil {
+		return AgentDecision{}, err
+	}
+	matched := make([]Result, 0)
+	var reasons []string
+	var score float64
+	action := "default"
+	allowed := false
+	for _, r := range all {
+		if r.Matched {
+			if action == "default" {
+				action = r.RuleName
+			}
+			allowed = true
+			score += r.Score
+			reasons = append(reasons, r.MatchedConditions...)
+			matched = append(matched, r)
+		}
+	}
+	decision := AgentDecision{Action: action, Allowed: allowed, Score: score, Reasons: reasons, MatchedRules: matched, AllRules: all, EvaluatedAt: time.Now().UTC()}
+	if e.cacheEnabled {
+		e.putCached(facts, decision)
+	}
+	return decision, nil
+}
+
+// EvaluateWhatIf compares current facts against candidate facts.
+func (e *Engine) EvaluateWhatIf(ctx context.Context, currentFacts, candidateFacts FactMap) (WhatIfResult, error) {
+	cur, err := e.EvaluateDecision(ctx, currentFacts)
+	if err != nil {
+		return WhatIfResult{}, err
+	}
+	cand, err := e.EvaluateDecision(ctx, candidateFacts)
+	if err != nil {
+		return WhatIfResult{}, err
+	}
+	return WhatIfResult{Current: cur, Candidate: cand, Delta: cand.Score - cur.Score}, nil
+}
+
+func (e *Engine) getCached(facts FactMap) (AgentDecision, bool) {
+	key, err := factKey(facts)
+	if err != nil {
+		return AgentDecision{}, false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	d, ok := e.cache[key]
+	return d, ok
+}
+
+func (e *Engine) putCached(facts FactMap, d AgentDecision) {
+	key, err := factKey(facts)
+	if err != nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cache[key] = d
+}
+
+func factKey(f FactMap) ([32]byte, error) {
+	b, err := json.Marshal(f)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(b), nil
+}
+
 func evalRule(ctx context.Context, r Rule, facts FactMap) (Result, error) {
 	matchedConds, ok, err := r.evaluate(ctx, facts)
 	if err != nil {
 		return Result{}, err
 	}
-	res := Result{
-		RuleName:          r.Name,
-		RuleDescription:   r.Description,
-		Matched:           ok,
-		Score:             0,
-		MatchedConditions: matchedConds,
-		Tags:              r.Tags,
-		Metadata:          r.Metadata,
-	}
+	res := Result{RuleName: r.Name, RuleDescription: r.Description, Matched: ok, Score: 0, MatchedConditions: matchedConds, Tags: r.Tags, Metadata: r.Metadata}
 	if ok {
 		res.Score = r.Score
 	}
