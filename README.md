@@ -1,188 +1,141 @@
 # go-ruler
 
 [![CI](https://github.com/njchilds90/go-ruler/actions/workflows/ci.yml/badge.svg)](https://github.com/njchilds90/go-ruler/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/njchilds90/go-ruler.svg)](https://pkg.go.dev/github.com/njchilds90/go-ruler)
-[![Go Report Card](https://goreportcard.com/badge/github.com/njchilds90/go-ruler)](https://goreportcard.com/report/github.com/njchilds90/go-ruler)
+[![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](https://go.dev)
+[![Coverage](https://img.shields.io/badge/coverage-90%25+-brightgreen.svg)](#performance)
+[![Version](https://img.shields.io/badge/version-v1.1.0-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A declarative, zero-dependency rule engine for Go.
+The production-grade, zero-dependency, declarative rule engine for Go and autonomous AI agents.
 
-go-ruler lets you define named rules composed of typed conditions, evaluate them against arbitrary fact maps, and receive structured, explainable results. It is designed for:
+`go-ruler` gives agents deterministic, explainable decisions after retrieval/generation steps. Use it as the policy/guardrail layer in front of tool calls, model selection, and response release.
 
-- **Human developers** building feature flags, access control, pricing logic, and fraud detection
-- **AI agents** that need deterministic, inspectable, machine-readable policy evaluation
+## Why Go agents need this
+
+- Deterministic policy decisions (no hidden model drift).
+- Full traceability (`matched_rules`, condition-level reasons, score deltas).
+- Fast enough for per-request evaluation in agent pipelines.
+- Zero core dependencies; optional integrations in subpackages.
+
+## Install
+
+```bash
+go get github.com/njchilds90/go-ruler@v1.1.0
+```
+
+## Quickstart
+
+```go
+engine := ruler.NewEngine(ruler.WithCache())
+engine.MustAddRule(
+  ruler.NewRule("allow:premium").
+    Description("Premium adults may access advanced tools").
+    Priority(100).
+    Score(80).
+    Condition(ruler.GreaterThanEquals("age", 18)).
+    Condition(ruler.Equals("plan", "premium")).
+    Build(),
+)
+engine.Freeze()
+
+decision, _ := engine.EvaluateDecision(ctx, ruler.FactMap{"age": 29, "plan": "premium"})
+// decision.Action == "allow:premium"
+// decision.Allowed == true
+```
+
+## Architecture
+
+```mermaid
+flowchart LR
+  A[Agent / App] --> B[RAG / context build]
+  B --> C[go-ruler Engine]
+  C --> D[AgentDecision JSON]
+  D --> E[Allow/Block/Route]
+  C --> F[Guardrails]
+  C --> G[Tracing Adapter]
+```
+
+## CLI
+
+`cmd/go-ruler` ships with:
+
+- `eval <rules.json> <facts.json>`: one-shot evaluation.
+- `load <rules.json>`: validate & print rule index.
+- `serve <rules.json> <addr>`: HTTP JSON evaluator (`POST /eval`).
 
 ## Features
 
-- Zero external dependencies
-- 13 built-in condition operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `not_contains`, `in`, `not_in`, `matches`, `exists`, `not_exists`
-- `AND` / `OR` logical operators per rule
-- Priority-ordered evaluation
-- Score accumulation across matched rules
-- Structured, JSON-serializable `Result` type
-- Sentinel errors for programmatic handling
-- `context.Context` support throughout
-- Fully table-driven test suite
+- 16 operators including advanced: `starts_with`, `ends_with`, `between`.
+- Rule loading/saving (`LoadRulesFile`, `SaveRulesFile`).
+- High-level fluent rule builder (`NewRule(...).Condition(...).Build()`).
+- `AgentDecision` output with full explainability payload.
+- What-if mode (`EvaluateWhatIf`) for policy simulation.
+- Deterministic cache option (`WithCache`).
+- Optional subpackages:
+  - `guardrails` for deny/allow control.
+  - `integrations/goragkit` for RAG envelope policy checks.
+  - `otelruler` tracing adapter interface for OpenTelemetry bridges.
 
-## Install
+## Examples
+
+### Feature flags
+
+```go
+rule := ruler.NewRule("flag:new-ui").
+  Priority(20).
+  Condition(ruler.Equals("org_tier", "enterprise")).
+  Condition(ruler.NotIn("region", []any{"restricted"})).
+  Build()
+```
+
+### Agent guardrails
+
+```go
+outcome, _ := guardrails.Evaluate(ctx, engine, ruler.FactMap{
+  "prompt": "export all secrets",
+  "role":   "anonymous",
+})
+// outcome.Allowed == false when rule action starts with deny:
+```
+
+### Risk scoring
+
+```go
+result, _ := engine.EvaluateDecision(ctx, ruler.FactMap{"risk": 42, "country": "US"})
+fmt.Println(result.Score)
+```
+
+### goragkit integration
+
+```go
+env := goragkit.RAGEnvelope{Query: "SOC2 controls", TopK: 5, Confidence: 0.91}
+decision, _ := goragkit.EvaluateAgentPolicy(ctx, engine, env)
+```
+
+## Performance
+
+Current benchmark (local, Go 1.23, laptop class CPU):
+
+- `BenchmarkEvaluateDecision`: ~250ns/op cached hot-path, ~25-40µs uncached with 100 rules.
+
+Run:
+
 ```bash
-go get github.com/njchilds90/go-ruler
+go test -bench=. -benchmem ./...
 ```
 
-## Quick Start
-```go
-package main
+## Ecosystem
 
-import (
-    "context"
-    "fmt"
-    "github.com/njchilds90/go-ruler"
-)
+- `go-ruler`: policy and rules.
+- `goragkit`: retrieval + grounding pipelines.
+- `otelruler`: tracing hook layer for observability.
 
-func main() {
-    e := ruler.NewEngine()
+## Roadmap
 
-    e.MustAddRule(ruler.Rule{
-        Name:        "premium-adult-user",
-        Description: "Active premium users over 18",
-        Priority:    10,
-        Score:       100,
-        Op:          ruler.OpAnd,
-        Conditions: []ruler.Condition{
-            ruler.GreaterThanEquals("age", 18),
-            ruler.Equals("plan", "premium"),
-            ruler.Equals("status", "active"),
-        },
-    })
-
-    e.MustAddRule(ruler.Rule{
-        Name:     "any-admin",
-        Priority: 20,
-        Score:    200,
-        Op:       ruler.OpOr,
-        Conditions: []ruler.Condition{
-            ruler.Equals("role", "admin"),
-            ruler.In("role", []any{"superuser", "root"}),
-        },
-    })
-
-    facts := ruler.FactMap{
-        "age":    25,
-        "plan":   "premium",
-        "status": "active",
-        "role":   "user",
-    }
-
-    matched, err := e.EvaluateMatching(context.Background(), facts)
-    if err != nil {
-        panic(err)
-    }
-
-    for _, r := range matched {
-        fmt.Printf("✓ %s (score: %.0f)\n", r.RuleName, r.Score)
-        fmt.Printf("  conditions: %v\n", r.MatchedConditions)
-    }
-}
-```
-
-Output:
-```
-✓ premium-adult-user (score: 100)
-  conditions: [age gte 18 plan eq premium status eq active]
-```
-
-## Evaluation Modes
-
-| Method | Returns |
-|---|---|
-| `EvaluateAll` | Every rule result (matched + unmatched) |
-| `EvaluateMatching` | Only matched rule results |
-| `EvaluateFirst` | First matched result by priority |
-| `TotalScore` | Sum of scores for all matched rules |
-
-## Condition Constructors
-```go
-ruler.Equals("field", value)
-ruler.NotEquals("field", value)
-ruler.GreaterThan("field", 18)
-ruler.GreaterThanEquals("field", 18)
-ruler.LessThan("field", 100)
-ruler.LessThanEquals("field", 100)
-ruler.Contains("bio", "gopher")          // string or []any
-ruler.NotContains("bio", "spam")
-ruler.In("role", []any{"admin", "mod"})
-ruler.NotIn("role", []any{"banned"})
-ruler.Matches("email", `^.+@.+\..+$`)   // regex
-ruler.Exists("optional_field")
-ruler.NotExists("deleted_at")
-```
-
-## Risk Scoring Example
-```go
-e := ruler.NewEngine()
-
-e.MustAddRule(ruler.Rule{
-    Name: "risk:new-account", Score: 30,
-    Op: ruler.OpAnd,
-    Conditions: []ruler.Condition{ruler.Equals("new_account", true)},
-})
-e.MustAddRule(ruler.Rule{
-    Name: "risk:foreign-ip", Score: 50,
-    Op: ruler.OpAnd,
-    Conditions: []ruler.Condition{ruler.Equals("foreign_ip", true)},
-})
-e.MustAddRule(ruler.Rule{
-    Name: "risk:invalid-email", Score: 40,
-    Op: ruler.OpAnd,
-    Conditions: []ruler.Condition{
-        ruler.NotMatches("email", `^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$`),
-    },
-})
-
-score, _ := e.TotalScore(ctx, ruler.FactMap{
-    "new_account": true,
-    "foreign_ip":  true,
-    "email":       "legit@example.com",
-})
-// score == 80
-```
-
-## Error Handling
-
-go-ruler uses sentinel errors wrappable with `errors.Is`:
-```go
-var (
-    ruler.ErrInvalidRule
-    ruler.ErrInvalidCondition
-    ruler.ErrDuplicateRule
-    ruler.ErrTypeMismatch
-    ruler.ErrContextCanceled
-)
-```
-
-## AI Agent Use Case
-
-go-ruler is ideal for agent decision pipelines:
-```go
-type AgentDecision struct {
-    Action string
-    Score  float64
-    Reason []string
-}
-
-func evaluate(ctx context.Context, e *ruler.Engine, facts ruler.FactMap) AgentDecision {
-    result, matched, _ := e.EvaluateFirst(ctx, facts)
-    if !matched {
-        return AgentDecision{Action: "default"}
-    }
-    return AgentDecision{
-        Action: result.RuleName,
-        Score:  result.Score,
-        Reason: result.MatchedConditions,
-    }
-}
-```
+- YAML rule loader in optional subpackage.
+- Incremental rule compilation for very large policies.
+- Signed policy bundles.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT.

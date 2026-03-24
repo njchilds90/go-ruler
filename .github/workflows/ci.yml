@@ -7,18 +7,16 @@ on:
     branches: ["main"]
 
 jobs:
-  test:
-    name: Test
+  lint-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ["1.21", "1.22", "1.23"]
+        go-version: ["1.22", "1.23"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -31,11 +29,16 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test with race detector
-        run: go test -v -race -count=1 ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+
+      - name: Test (race)
+        run: go test -race -count=1 ./...
 
       - name: Test coverage
-        run: go test -coverprofile=coverage.out ./...
+        run: go test -covermode=atomic -coverprofile=coverage.out ./...
 
-      - name: Show coverage
+      - name: Coverage summary
         run: go tool cover -func=coverage.out
